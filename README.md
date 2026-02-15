@@ -2,7 +2,7 @@
 
 Expose the VS Code debugger as an MCP server so AI agents can run debugging workflows through DAP.
 
-Install the extension, connect to the local SSE endpoint, and control breakpoints, stepping, stack traces, variables, and evaluation from your AI tool.
+Install the extension, connect to the local Streamable HTTP endpoint, and control breakpoints, stepping, stack traces, variables, and evaluation from your AI tool.
 
 ## Why this extension
 
@@ -14,20 +14,26 @@ Install the extension, connect to the local SSE endpoint, and control breakpoint
 
 1. Install the extension in VS Code.
 2. Ensure your target language debugger is installed (JavaScript/TypeScript works out of the box).
-3. Add this MCP server entry to your AI tool config (example: `~/.claude/settings.json`):
+3. Add this MCP server entry to your AI tool config:
 
 ```json
 {
   "mcpServers": {
     "vscode-debug": {
-      "type": "sse",
-      "url": "http://127.0.0.1:6589/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:6589/mcp"
     }
   }
 }
 ```
 
 4. Open your workspace in VS Code and call `start_debug(...)` from your AI tool.
+
+For Codex CLI:
+
+```bash
+codex mcp add vscode-debug --url http://127.0.0.1:6589/mcp
+```
 
 ## MCP tools
 
@@ -77,7 +83,7 @@ stop_debug();
 
 | Setting | Default | Description |
 |---|---|---|
-| `vscodeDebugBridge.port` | `6589` | Port for the local MCP endpoint (`http://127.0.0.1:<port>/sse`) |
+| `vscodeDebugBridge.port` | `6589` | Port for the local MCP endpoint (`http://127.0.0.1:<port>/mcp`) |
 | `vscodeDebugBridge.showStartupNotification` | `true` | Show startup notification when server is ready |
 
 | Env var | Default | Description |
@@ -92,7 +98,7 @@ stop_debug();
 
 - `No active debug session.`: run `start_debug` first.
 - `VS Code refused to start the debug session.`: verify your `launch.json` config name or inline debug config.
-- Cannot connect to `http://127.0.0.1:6589/sse`: confirm VS Code is open and another process is not using the same port.
+- Cannot connect to `http://127.0.0.1:6589/mcp`: confirm VS Code is open and another process is not using the same port.
 - DAP command errors: verify command arguments for your debugger implementation.
 
 ## Security

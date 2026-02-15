@@ -1,7 +1,7 @@
 {
   "name": "vscode-debug-bridge",
   "displayName": "VS Code Debug Bridge",
-  "description": "Expose the VS Code debugger as an MCP server (SSE) for AI agents. Start, inspect, and control debug sessions with DAP commands.",
+  "description": "Expose the VS Code debugger as a Streamable HTTP MCP server for AI agents. Start, inspect, and control debug sessions with DAP commands.",
   "version": "0.1.0",
   "publisher": "local",
   "author": "fj-th",
@@ -55,7 +55,7 @@
           "default": 6589,
           "minimum": 1,
           "maximum": 65535,
-          "description": "Port for the local MCP server endpoint (http://127.0.0.1:<port>/sse). Environment variable VSCODE_DEBUG_BRIDGE_PORT takes precedence."
+          "description": "Port for the local MCP server endpoint (http://127.0.0.1:<port>/mcp). Environment variable VSCODE_DEBUG_BRIDGE_PORT takes precedence."
         },
         "vscodeDebugBridge.showStartupNotification": {
           "type": "boolean",

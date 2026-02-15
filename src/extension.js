@@ -1,13 +1,17 @@
 const vscode = require("vscode");
 const http = require("http");
+const { randomUUID } = require("crypto");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
-const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
+const {
+  StreamableHTTPServerTransport,
+} = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
 const { z } = require("zod");
 
 const DEFAULT_PORT = 6589;
 
 let httpServer;
 let outputChannel;
+const streamableSessions = new Map();
 
 function parsePort(value) {
   const port = Number(value);
@@ -27,7 +31,7 @@ function resolvePort() {
 }
 
 function endpointForPort(port) {
-  return `http://127.0.0.1:${port}/sse`;
+  return `http://127.0.0.1:${port}/mcp`;
 }
 
 function resolveFolder(name) {
@@ -45,22 +49,75 @@ function fail(text) {
   return { content: [{ type: "text", text }], isError: true };
 }
 
-function activate(context) {
-  outputChannel = vscode.window.createOutputChannel("Debug Bridge");
-  context.subscriptions.push(outputChannel);
-  const port = resolvePort();
-  const endpoint = endpointForPort(port);
+function toTextPayload(value, fallback) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined) {
+    return fallback;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
 
-  const showEndpointCommand = vscode.commands.registerCommand(
-    "vscodeDebugBridge.showEndpoint",
-    () => {
-      const msg = `Debug Bridge MCP endpoint: ${endpoint}`;
-      outputChannel.appendLine(msg);
-      vscode.window.showInformationMessage(msg);
-    }
+function getSessionId(req) {
+  const value = req.headers["mcp-session-id"];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function isInitializeRequest(message) {
+  return (
+    !!message &&
+    !Array.isArray(message) &&
+    message.jsonrpc === "2.0" &&
+    message.method === "initialize" &&
+    Object.prototype.hasOwnProperty.call(message, "id")
   );
-  context.subscriptions.push(showEndpointCommand);
+}
 
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1_000_000) {
+        reject(new Error("Request body too large"));
+        req.destroy();
+      }
+    });
+
+    req.on("error", reject);
+    req.on("end", () => {
+      if (raw.length === 0) {
+        resolve(undefined);
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(raw));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+function writeJsonRpcError(res, statusCode, code, message) {
+  res.writeHead(statusCode, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      error: { code, message },
+      id: null,
+    })
+  );
+}
+
+function createMcpServer() {
   const mcpServer = new McpServer({
     name: "vscode-debug-bridge",
     version: "0.1.0",
@@ -129,7 +186,19 @@ function activate(context) {
       }
       try {
         const result = await session.customRequest(command, args || {});
-        return ok(JSON.stringify(result, null, 2));
+        const text = toTextPayload(
+          result,
+          JSON.stringify(
+            {
+              command,
+              result: null,
+              note: "DAP request completed with no response payload.",
+            },
+            null,
+            2
+          )
+        );
+        return ok(text);
       } catch (err) {
         return fail(`DAP error (${command}): ${err.message}`);
       }
@@ -155,38 +224,131 @@ function activate(context) {
     }
   );
 
-  // ── HTTP + SSE transport ───────────────────────────────
-  const transports = new Map();
+  return mcpServer;
+}
+
+function activate(context) {
+  outputChannel = vscode.window.createOutputChannel("Debug Bridge");
+  context.subscriptions.push(outputChannel);
+  const port = resolvePort();
+  const endpoint = endpointForPort(port);
+
+  const showEndpointCommand = vscode.commands.registerCommand(
+    "vscodeDebugBridge.showEndpoint",
+    () => {
+      const msg = `Debug Bridge MCP endpoint: ${endpoint}`;
+      outputChannel.appendLine(msg);
+      vscode.window.showInformationMessage(msg);
+    }
+  );
+  context.subscriptions.push(showEndpointCommand);
+
+  // ── HTTP Streamable transport (/mcp) ───────────────────
 
   httpServer = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://127.0.0.1:${port}`);
+    try {
+      const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+      const method = req.method || "GET";
 
-    if (req.method === "GET" && url.pathname === "/sse") {
-      outputChannel.appendLine("[mcp] Client connected");
-      const transport = new SSEServerTransport("/message", res);
-      transports.set(transport.sessionId, transport);
-      res.on("close", () => {
-        transports.delete(transport.sessionId);
-        outputChannel.appendLine("[mcp] Client disconnected");
-      });
-      await mcpServer.connect(transport);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/message") {
-      const sessionId = url.searchParams.get("sessionId");
-      const transport = transports.get(sessionId);
-      if (!transport) {
-        res.writeHead(400, { "Content-Type": "text/plain" });
-        res.end("Unknown session");
+      if (url.pathname !== "/mcp") {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not found");
         return;
       }
-      await transport.handlePostMessage(req, res);
-      return;
-    }
 
-    res.writeHead(404, { "Content-Type": "text/plain" });
-    res.end("Not found");
+      if (!["GET", "POST", "DELETE"].includes(method)) {
+        writeJsonRpcError(res, 405, -32000, "Method not allowed.");
+        return;
+      }
+
+      const sessionId = getSessionId(req);
+
+      if (method === "POST") {
+        let parsedBody;
+        try {
+          parsedBody = await readJsonBody(req);
+        } catch {
+          writeJsonRpcError(res, 400, -32700, "Parse error: Invalid JSON");
+          return;
+        }
+
+        if (sessionId) {
+          const existingSession = streamableSessions.get(sessionId);
+          if (!existingSession) {
+            writeJsonRpcError(
+              res,
+              404,
+              -32000,
+              "Bad Request: Session not found"
+            );
+            return;
+          }
+          await existingSession.transport.handleRequest(req, res, parsedBody);
+          return;
+        }
+
+        if (!isInitializeRequest(parsedBody)) {
+          writeJsonRpcError(
+            res,
+            400,
+            -32000,
+            "Bad Request: No valid session ID provided"
+          );
+          return;
+        }
+
+        const mcpServer = createMcpServer();
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (newSessionId) => {
+            streamableSessions.set(newSessionId, { transport, mcpServer });
+            outputChannel.appendLine(`[mcp] Client connected (${newSessionId})`);
+          },
+        });
+
+        transport.onclose = () => {
+          const closedSessionId = transport.sessionId;
+          if (closedSessionId && streamableSessions.has(closedSessionId)) {
+            streamableSessions.delete(closedSessionId);
+            outputChannel.appendLine(
+              `[mcp] Client disconnected (${closedSessionId})`
+            );
+          }
+          void mcpServer.close().catch(() => {});
+        };
+
+        transport.onerror = (err) => {
+          outputChannel.appendLine(`[mcp:transport:error] ${err.message}`);
+        };
+
+        await mcpServer.connect(transport);
+        await transport.handleRequest(req, res, parsedBody);
+        return;
+      }
+
+      if (!sessionId) {
+        writeJsonRpcError(
+          res,
+          400,
+          -32000,
+          "Bad Request: Mcp-Session-Id header is required"
+        );
+        return;
+      }
+
+      const existingSession = streamableSessions.get(sessionId);
+      if (!existingSession) {
+        writeJsonRpcError(res, 404, -32000, "Bad Request: Session not found");
+        return;
+      }
+
+      await existingSession.transport.handleRequest(req, res);
+    } catch (err) {
+      outputChannel.appendLine(`[mcp:error] ${err.message}`);
+      if (!res.headersSent) {
+        writeJsonRpcError(res, 500, -32603, "Internal server error");
+      }
+    }
   });
 
   httpServer.listen(port, "127.0.0.1", () => {
@@ -208,6 +370,12 @@ function activate(context) {
 
   context.subscriptions.push({
     dispose: () => {
+      for (const { transport, mcpServer } of streamableSessions.values()) {
+        void transport.close().catch(() => {});
+        void mcpServer.close().catch(() => {});
+      }
+      streamableSessions.clear();
+
       if (httpServer) {
         httpServer.close();
         httpServer = undefined;
@@ -217,6 +385,12 @@ function activate(context) {
 }
 
 function deactivate() {
+  for (const { transport, mcpServer } of streamableSessions.values()) {
+    void transport.close().catch(() => {});
+    void mcpServer.close().catch(() => {});
+  }
+  streamableSessions.clear();
+
   if (httpServer) {
     httpServer.close();
     httpServer = undefined;

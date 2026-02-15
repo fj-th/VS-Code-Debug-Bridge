@@ -1,6 +1,7 @@
 """Sample Python project for testing VS Code Debug Bridge."""
 
 
+
 def fibonacci(n):
     """Calculate fibonacci sequence up to n terms."""
     sequence = []
