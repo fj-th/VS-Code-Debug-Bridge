@@ -1,0 +1,81 @@
+{
+  "name": "vscode-debug-bridge",
+  "displayName": "VS Code Debug Bridge",
+  "description": "Expose the VS Code debugger as an MCP server (SSE) for AI agents. Start, inspect, and control debug sessions with DAP commands.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "author": "fj-th",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fj-th/VS-Code-Debug-Bridge.git"
+  },
+  "homepage": "https://github.com/fj-th/VS-Code-Debug-Bridge",
+  "bugs": {
+    "url": "https://github.com/fj-th/VS-Code-Debug-Bridge/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agent",
+    "debugger",
+    "debugging",
+    "dap",
+    "debug-adapter-protocol",
+    "vscode-debugger",
+    "claude",
+    "cursor"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodeDebugBridge.showEndpoint",
+        "title": "Debug Bridge: Show MCP Endpoint",
+        "category": "Debug Bridge"
+      }
+    ],
+    "configuration": {
+      "title": "VS Code Debug Bridge",
+      "properties": {
+        "vscodeDebugBridge.port": {
+          "type": "number",
+          "default": 6589,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port for the local MCP server endpoint (http://127.0.0.1:<port>/sse). Environment variable VSCODE_DEBUG_BRIDGE_PORT takes precedence."
+        },
+        "vscodeDebugBridge.showStartupNotification": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a startup notification when the MCP server is ready."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production && vsce package",
+    "vscode:prepublish": "node esbuild.js --production"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.0"
+  }
+}

@@ -1,0 +1,10 @@
+src/**
+node_modules/**
+esbuild.js
+sample/**
+.vscode/**
+**/*.map
+test-*.js
+*.vsix
+.DS_Store
+package-lock.json
